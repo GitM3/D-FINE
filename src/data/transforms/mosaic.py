@@ -23,23 +23,40 @@ class Mosaic(T.Transform):
         self,
         size,
         max_size=None,
+        p=1.0,
+        output_size=None,
+        crop=True,
+        degrees=0,
+        translate=(0.1, 0.1),
+        scale=(0.5, 1.5),
+        shear=None,
+        fill=114,
     ) -> None:
         super().__init__()
+        if not 0.0 <= p <= 1.0:
+            raise ValueError(f"Mosaic probability must be in [0, 1], got {p}.")
+        self.p = p
         self.resize = T.Resize(size=size, max_size=max_size)
-        self.crop = T.RandomCrop(size=max_size if max_size else size)
+        self.output_size = output_size or max_size or size
+        self.random_crop = T.RandomCrop(size=self.output_size) if crop else None
 
-        # TODO add arg `output_size` for affine`
-        # self.random_perspective = T.RandomPerspective(distortion_scale=0.5, p=1., )
         self.random_affine = T.RandomAffine(
-            degrees=0, translate=(0.1, 0.1), scale=(0.5, 1.5), fill=114
+            degrees=degrees,
+            translate=translate,
+            scale=scale,
+            shear=shear,
+            fill=fill,
         )
 
     def forward(self, *inputs):
         inputs = inputs if len(inputs) > 1 else inputs[0]
         image, target, dataset = inputs
+        if torch.rand(1) >= self.p:
+            return image, target, dataset
 
-        images = []
-        targets = []
+        image, target = self.resize(image, target)
+        images = [image]
+        targets = [target]
         indices = random.choices(range(len(dataset)), k=3)
         for i in indices:
             image, target = dataset.load_item(i)
@@ -47,7 +64,7 @@ class Mosaic(T.Transform):
             images.append(image)
             targets.append(target)
 
-        h, w = F.get_spatial_size(images[0])
+        h, w = F.get_size(images[0])
         offset = [[0, 0], [w, 0], [0, h], [w, h]]
         image = Image.new(mode=images[0].mode, size=(w * 2, h * 2), color=0)
         for i, im in enumerate(images):
@@ -77,7 +94,7 @@ class Mosaic(T.Transform):
             target["masks"] = convert_to_tv_tensor(target["masks"], "masks")
 
         image, target = self.random_affine(image, target)
-        # image, target = self.resize(image, target)
-        image, target = self.crop(image, target)
+        if self.random_crop is not None:
+            image, target = self.random_crop(image, target)
 
         return image, target, dataset
